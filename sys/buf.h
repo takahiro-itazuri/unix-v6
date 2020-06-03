@@ -1,9 +1,9 @@
 /*
  * buf 構造体: ブロックデバイスのバッファヘッダ (バッファの管理情報)
- * 任意のバッファは、2 つの双方向リスト (b_forw/b_back と av_forw/av_back) でリンクされている。
- * b_forw/b_back は、各ブロックデバイスに割り当てられているバッファを表す。
- * av_forw/av_back は、処理中 (B_BUSY) でないバッファが、最長不使用 (LRU: Least Recently Used) の順番
- * で並んでおり、新しいバッファの割り当てに利用される。
+ * 任意のバッファは、2 つの双方向リスト (b_list と av_list) でリンクされている。
+ * b_list (b_forw/b_back) は、各ブロックデバイスに割り当てられているバッファを表す。
+ * av_list (av_forw/av_back) は、処理中 (B_BUSY) でないバッファが、最長不使用 (LRU: Least 
+ * Recently Used) の順番で並んでおり、新しいバッファの割り当てに利用される。
  * 任意のバッファが b-list 内に存在しているが、av-list に存在しているとは限らない。
  */
 struct buf
@@ -23,7 +23,7 @@ struct buf
 } buf[NBUF];				/* NBUF は sys/param.h で定義されている */
 
 /*
- * devtab 構造体: 各ブロックデバイスごとに用意される構造体
+ * devtab 構造体: ブロックデバイスごとに用意される構造体
  * 2 つの双方向リスト (b_forw/b_back と d_actf/d_actl) を保持している。
  * b_forw/b_back は、このデバイスのバッファの先頭と最後尾を示している。
  * d_actf/d_actl は、デバイスの I/O キューの先頭と最後尾を示している。
@@ -49,7 +49,7 @@ struct	buf bfreelist; /* デバイスに割り当てられていない (NODEV �
 #define	B_READ	01	/* 読み込み */
 #define	B_DONE	02	/* 最新の情報が保持されている */
 #define	B_ERROR	04	/* エラーが発生した */
-#define	B_BUSY	010	/* バッファは使用中で、av_forw/av_back 上にない */
+#define	B_BUSY	010	/* バッファは使用中で、av_list 上にない */
 #define	B_PHYS	020	/* RAW 入出力中 */
 #define	B_MAP	040	/* UNIBUS マップ (PDP-11/40 では使用しない) */
 #define	B_WANTED 0100	/* バッファは使用中であり、解放されるのを待っているプロセスがある */
