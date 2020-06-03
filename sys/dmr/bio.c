@@ -1,5 +1,5 @@
-#
 /*
+ * Block I/O
  */
 
 #include "../param.h"
@@ -10,16 +10,8 @@
 #include "../proc.h"
 #include "../seg.h"
 
-/*
- * This is the set of buffers proper, whose heads
- * were declared in buf.h.  There can exist buffer
- * headers not pointing here that are used purely
- * as arguments to the I/O routines to describe
- * I/O to be done-- e.g. swbuf, just below, for
- * swapping.
- */
-char	buffers[NBUF][514];
-struct	buf	swbuf;
+char	buffers[NBUF][514];	/* バッファデータ */
+struct	buf	swbuf;		/* スワップバッファ */
 
 /*
  * Declarations of the tables for the magtape devices;
@@ -29,46 +21,24 @@ int	tmtab;
 int	httab;
 
 /*
- * The following several routines allocate and free
- * buffers with various side effects.  In general the
- * arguments to an allocate routine are a device and
- * a block number, and the value is a pointer to
- * to the buffer header; the buffer is marked "busy"
- * so that no on else can touch it.  If the block was
- * already in core, no I/O need be done; if it is
- * already busy, the process waits until it becomes free.
- * The following routines allocate a buffer:
- *	getblk
- *	bread
- *	breada
- * Eventually the buffer must be released, possibly with the
- * side effect of writing it out, by using one of
- *	bwrite
- *	bdwrite
- *	bawrite
- *	brelse
- */
-
-/*
- * Read in (if necessary) the block and return a buffer pointer.
+ * bread 関数: 同期読み込み
  */
 bread(dev, blkno)
 {
 	register struct buf *rbp;
 
 	rbp = getblk(dev, blkno);
-	if (rbp->b_flags&B_DONE)
+	if (rbp->b_flags&B_DONE)	/* バッファが最新だった場合 */
 		return(rbp);
 	rbp->b_flags =| B_READ;
-	rbp->b_wcount = -256;
+	rbp->b_wcount = -256;	/* ? */
 	(*bdevsw[dev.d_major].d_strategy)(rbp);
 	iowait(rbp);
 	return(rbp);
 }
 
 /*
- * Read in the block, like bread, but also start I/O on the
- * read-ahead block (which is not allocated to the caller)
+ * breada 関数: 同期読み込みと先行読み込み
  */
 breada(adev, blkno, rablkno)
 {
@@ -77,24 +47,25 @@ breada(adev, blkno, rablkno)
 
 	dev = adev;
 	rbp = 0;
-	if (!incore(dev, blkno)) {
+	if (!incore(dev, blkno)) {	/* ブロックのバッファが存在しない場合 */
 		rbp = getblk(dev, blkno);
-		if ((rbp->b_flags&B_DONE) == 0) {
+		if ((rbp->b_flags&B_DONE) == 0) {	/* B_DONE が立っていない場合、同期読み込み */
 			rbp->b_flags =| B_READ;
 			rbp->b_wcount = -256;
 			(*bdevsw[adev.d_major].d_strategy)(rbp);
 		}
 	}
-	if (rablkno && !incore(dev, rablkno)) {
+	if (rablkno && !incore(dev, rablkno)) {	/* ブロックのバッファが存在しない場合 */
 		rabp = getblk(dev, rablkno);
 		if (rabp->b_flags & B_DONE)
 			brelse(rabp);
-		else {
+		else {	/* B_DONE が立っていない場合、非同期読み込み */
 			rabp->b_flags =| B_READ|B_ASYNC;
 			rabp->b_wcount = -256;
 			(*bdevsw[adev.d_major].d_strategy)(rabp);
 		}
 	}
+	/* ブロックのバッファが存在する場合 */
 	if (rbp==0)
 		return(bread(dev, blkno));
 	iowait(rbp);
@@ -102,8 +73,7 @@ breada(adev, blkno, rablkno)
 }
 
 /*
- * Write the buffer, waiting for completion.
- * Then release the buffer.
+ * bwrite 関数: 書き込み
  */
 bwrite(bp)
 struct buf *bp;
@@ -116,20 +86,15 @@ struct buf *bp;
 	rbp->b_flags =& ~(B_READ | B_DONE | B_ERROR | B_DELWRI);
 	rbp->b_wcount = -256;
 	(*bdevsw[rbp->b_dev.d_major].d_strategy)(rbp);
-	if ((flag&B_ASYNC) == 0) {
+	if ((flag&B_ASYNC) == 0) {	/* 同期書き込み */
 		iowait(rbp);
 		brelse(rbp);
-	} else if ((flag&B_DELWRI)==0)
+	} else if ((flag&B_DELWRI)==0)	/* 非同期書き込み */
 		geterror(rbp);
 }
 
 /*
- * Release the buffer, marking it so that if it is grabbed
- * for another purpose it will be written out before being
- * given up (e.g. when writing a partial block where it is
- * assumed that another write for the same block will soon follow).
- * This can't be done for magtape, since writes must be done
- * in the same order as requested.
+ * bdwrite 関数: 遅延書き込み
  */
 bdwrite(bp)
 struct buf *bp;
@@ -148,7 +113,7 @@ struct buf *bp;
 }
 
 /*
- * Release the buffer, start I/O on it, but don't wait for completion.
+ * bawrite 関数: 非同期書き込み
  */
 bawrite(bp)
 struct buf *bp;
@@ -161,7 +126,7 @@ struct buf *bp;
 }
 
 /*
- * release the buffer, with no I/O implied.
+ * brelse 関数: バッファの解放
  */
 brelse(bp)
 struct buf *bp;
@@ -170,18 +135,19 @@ struct buf *bp;
 	register int sps;
 
 	rbp = bp;
-	if (rbp->b_flags&B_WANTED)
+	if (rbp->b_flags&B_WANTED)	/* このバッファを待っているプロセスを起こす */
 		wakeup(rbp);
-	if (bfreelist.b_flags&B_WANTED) {
+	if (bfreelist.b_flags&B_WANTED) {	/* 利用可能なバッファを待っているプロセスを起こす */
 		bfreelist.b_flags =& ~B_WANTED;
 		wakeup(&bfreelist);
 	}
-	if (rbp->b_flags&B_ERROR)
-		rbp->b_dev.d_minor = -1;  /* no assoc. on error */
+	if (rbp->b_flags&B_ERROR)	/* エラーが発生していた場合 */
+		rbp->b_dev.d_minor = -1;
 	backp = &bfreelist.av_back;
 	sps = PS->integ;
 	spl6();
 	rbp->b_flags =& ~(B_WANTED|B_BUSY|B_ASYNC);
+	/* 利用可能なバッファリストの最後尾にバッファを追加する */
 	(*backp)->av_forw = rbp;
 	rbp->av_back = *backp;
 	*backp = rbp;
@@ -190,8 +156,7 @@ struct buf *bp;
 }
 
 /*
- * See if the block is associated with some buffer
- * (mainly to avoid getting hung up on a wait in breada)
+ * incore 関数: そのブロックにバッファが割り当てられているかを確認
  */
 incore(adev, blkno)
 {
@@ -208,12 +173,11 @@ incore(adev, blkno)
 }
 
 /*
- * Assign a buffer for the given block.  If the appropriate
- * block is already associated, return it; otherwise search
- * for the oldest non-busy buffer and reassign it.
- * When a 512-byte area is wanted for some random reason
- * (e.g. during exec, for the user arglist) getblk can be called
- * with device NODEV to avoid unwanted associativity.
+ * getblk 関数: デバイス番号とブロック番号からバッファを取得する
+ * すでに関連づけられたバッファがあれば、それを返す。B_BUSY なら B_WANTED を設定してスリープ
+ * する。
+ * すでに関連づけられたバッファがなければ、B_BUSY ではないバッファを探し出し、再割り当てした
+ * 上で B_BUSY を設定して返す。
  */
 getblk(dev, blkno)
 {
@@ -225,9 +189,9 @@ getblk(dev, blkno)
 		panic("blkdev");
 
     loop:
-	if (dev < 0)
+	if (dev < 0)	/* NODEV */
 		dp = &bfreelist;
-	else {
+	else {			/* NODEV 以外 */
 		dp = bdevsw[dev.d_major].d_tab;
 		if(dp == NULL)
 			panic("devtab");
@@ -235,7 +199,7 @@ getblk(dev, blkno)
 			if (bp->b_blkno!=blkno || bp->b_dev!=dev)
 				continue;
 			spl6();
-			if (bp->b_flags&B_BUSY) {
+			if (bp->b_flags&B_BUSY) {	/* バッファが B_BUSY な場合 */
 				bp->b_flags =| B_WANTED;
 				sleep(bp, PRIBIO);
 				spl0();
@@ -246,8 +210,10 @@ getblk(dev, blkno)
 			return(bp);
 		}
 	}
+
+	/* バッファが見つからなかった場合 */
 	spl6();
-	if (bfreelist.av_forw == &bfreelist) {
+	if (bfreelist.av_forw == &bfreelist) {	/* 利用可能なバッファリストが空の場合 */
 		bfreelist.b_flags =| B_WANTED;
 		sleep(&bfreelist, PRIBIO);
 		spl0();
@@ -255,7 +221,7 @@ getblk(dev, blkno)
 	}
 	spl0();
 	notavail(bp = bfreelist.av_forw);
-	if (bp->b_flags & B_DELWRI) {
+	if (bp->b_flags & B_DELWRI) {	/* 遅延書き込みフラグが設定されている場合 */
 		bp->b_flags =| B_ASYNC;
 		bwrite(bp);
 		goto loop;
@@ -273,8 +239,7 @@ getblk(dev, blkno)
 }
 
 /*
- * Wait for I/O completion on the buffer; return errors
- * to the user.
+ * iowait 関数: I/O の完了を待つ
  */
 iowait(bp)
 struct buf *bp;
@@ -283,15 +248,15 @@ struct buf *bp;
 
 	rbp = bp;
 	spl6();
-	while ((rbp->b_flags&B_DONE)==0)
+	while ((rbp->b_flags&B_DONE)==0)	/* B_DONE フラグが立つまで待つ */
 		sleep(rbp, PRIBIO);
 	spl0();
 	geterror(rbp);
 }
 
 /*
- * Unlink a buffer from the available list and mark it busy.
- * (internal interface)
+ * notavail 関数: 利用可能なバッファからバッファを取得する
+ * 利用可能なバッファリストからバッファを切り離し、B_BUSY を設定する。
  */
 notavail(bp)
 struct buf *bp;
@@ -309,8 +274,7 @@ struct buf *bp;
 }
 
 /*
- * Mark I/O complete on a buffer, release it if I/O is asynchronous,
- * and wake up anyone waiting for it.
+ * iodone 関数: I/O が完了したことをマークする
  */
 iodone(bp)
 struct buf *bp;
@@ -321,19 +285,19 @@ struct buf *bp;
 	if(rbp->b_flags&B_MAP)
 		mapfree(rbp);
 	rbp->b_flags =| B_DONE;
-	if (rbp->b_flags&B_ASYNC)
+	if (rbp->b_flags&B_ASYNC)	/* 非同期 I/O */
 		brelse(rbp);
-	else {
+	else {				/* 同期 I/O */
 		rbp->b_flags =& ~B_WANTED;
 		wakeup(rbp);
 	}
 }
 
 /*
- * Zero the core associated with a buffer.
+ * clrbuf 関数: バッファデータの 0 クリア
  */
 clrbuf(bp)
-int *bp;
+int *bp;	/* struct buf* bp; しない理由がわからない */
 {
 	register *p;
 	register c;
@@ -346,8 +310,11 @@ int *bp;
 }
 
 /*
- * Initialize the buffer I/O system by freeing
- * all buffers and setting all device buffer lists to empty.
+ * binit 関数: バッファ I/O システムの初期化
+ * ・bfreelist を初期化する
+ * ・buf と buffers を紐付ける
+ * ・すべてのバッファを NODEV の b_list に追加する。
+ * ・bdevsw に設定されている devtab.d_tab を初期化する。
  */
 binit()
 {
@@ -360,8 +327,9 @@ binit()
 	    bfreelist.av_forw = bfreelist.av_back = &bfreelist;
 	for (i=0; i<NBUF; i++) {
 		bp = &buf[i];
-		bp->b_dev = -1;
-		bp->b_addr = buffers[i];
+		bp->b_dev = -1;			/* -1: NODEV */
+		bp->b_addr = buffers[i];	/* buf と buffers の紐付け */
+		/* bfreelist の b_list の先頭に挿入する */
 		bp->b_back = &bfreelist;
 		bp->b_forw = bfreelist.b_forw;
 		bfreelist.b_forw->b_back = bp;
@@ -370,6 +338,7 @@ binit()
 		brelse(bp);
 	}
 	i = 0;
+	/* bdevsw の初期化 */
 	for (bdp = bdevsw; bdp->d_open; bdp++) {
 		dp = bdp->d_tab;
 		if(dp) {
@@ -521,6 +490,9 @@ swap(blkno, coreaddr, count, rdflg)
  * are flushed out.
  * (from umount and update)
  */
+/*
+ * bflush 関数: 遅延書き込みバッファをまとめて書き出す
+ */
 bflush(dev)
 {
 	register struct buf *bp;
@@ -539,14 +511,7 @@ loop:
 }
 
 /*
- * Raw I/O. The arguments are
- *	The strategy routine for the device
- *	A buffer, which will always be a special buffer
- *	  header owned exclusively by the device for this purpose
- *	The device number
- *	Read/write flag
- * Essentially all the work is computing physical addresses and
- * validating them.
+ * physio 関数: RAW I/O
  */
 physio(strat, abp, dev, rw)
 struct buf *abp;
@@ -558,7 +523,7 @@ int (*strat)();
 	int ts;
 
 	bp = abp;
-	base = u.u_base;
+	base = u.u_base;	/* 転送データの仮想アドレス */
 	/*
 	 * Check odd base, odd count, and address wraparound
 	 */
@@ -619,10 +584,7 @@ int (*strat)();
 }
 
 /*
- * Pick up the device's error number and pass it to the user;
- * if there is an error but the number is 0 set a generalized
- * code.  Actually the latter is always true because devices
- * don't yet return specific errors.
+ * geterror 関数: エラー処理
  */
 geterror(abp)
 struct buf *abp;
